@@ -1,0 +1,47 @@
+{
+  "Comment": "EBS gp2->gp3 auto-convert",
+  "StartAt": "FilterVolumes",
+  "States": {
+    "FilterVolumes": {
+      "Type": "Task",
+      "Resource": "arn:aws:paste:here",
+      "Next": "HasVolumes"
+    },
+    "HasVolumes": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.Volumes",
+          "IsPresent": true,
+          "Next": "LogToDynamo"
+        }
+      ],
+      "Default": "NotifyNoChange"
+    },
+    "LogToDynamo": {
+      "Type": "Task",
+      "Resource": "arn:aws:paste:here",
+      "Next": "ModifyVolumes"
+    },
+    "ModifyVolumes": {
+      "Type": "Task",
+      "Resource": "arn:aws:paste:here",
+      "Next": "VerifyModification"
+    },
+    "VerifyModification": {
+      "Type": "Task",
+      "Resource": "arn:aws:paste:here",
+      "Next": "Notify"
+    },
+    "Notify": {
+      "Type": "Task",
+      "Resource": "arn:aws:paste:here",
+      "End": true
+    },
+    "NotifyNoChange": {
+      "Type": "Task",
+      "Resource": "arn:aws:paste:here",
+      "End": true
+    }
+  }
+}
