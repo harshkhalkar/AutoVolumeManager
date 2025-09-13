@@ -264,3 +264,160 @@ Accidental conversion of critical volumes can be disruptive.
 - Ensures only explicitly marked volumes are affected.
 
 ---
+
+# Code Explaination
+
+## 1. [`filter_volumes.py`](https://github.com/harshkhalkar/AutoVolumeManager/blob/main/lambda-function/filter_volumes.py) – Filter Volumes for Conversion
+
+### **Purpose**
+
+Find EBS volumes of a specific type that are tagged for conversion.
+
+### **Key Code Elements**
+
+- Reads `VOLUME_TYPES` from environment variables.
+- Uses `ec2.describe_volumes()` with a filter on `volume-type`.
+- Iterates through paginated results using a paginator.
+- For each volume:
+    - Retrieves tags and checks if `AutoConvert=true`.
+    - If attached, extracts `InstanceId`.
+    - Builds a candidate list with the following metadata:
+
+```python
+{
+  'VolumeId', 'Size', 'VolumeType', 'AvailabilityZone', 'InstanceId', 'Tags'
+}
+
+```
+
+### **Returns**
+
+- A list of candidate volumes.
+- A count of all scanned volumes.
+
+---
+
+## 2. [`log_to_dynamo.py`](https://github.com/harshkhalkar/AutoVolumeManager/blob/main/lambda-function/log_to_dynamo.py) – Log Volumes to DynamoDB
+
+### **Purpose**
+
+Save volume details to DynamoDB with a `PENDING` status.
+
+### **Key Code Elements**
+
+- Reads `DDB_TABLE` from environment variables.
+- For each volume:
+    - Builds a record with:
+
+```python
+{
+  'VolumeId',
+  'InstanceId',
+  'Size',
+  'AvailabilityZone',
+  'Region',
+  'Tags',
+  'LoggedAt',
+  'ConversionStatus': 'PENDING'
+}
+
+```
+
+- Writes the item to DynamoDB using `put_item()`.
+- Catches `ClientError` and logs the error if the write fails.
+- Adds a `LoggedAt` timestamp to each volume for tracking.
+
+---
+
+## 3. [`modify_volumes.py`](https://github.com/harshkhalkar/AutoVolumeManager/blob/main/lambda-function/modify_volume.py) – Modify Volumes
+
+### **Purpose**
+
+Modify the EBS volume type using AWS API.
+
+### **Key Code Elements**
+
+- Reads:
+    - `TARGET_VOLUME_TYPE` (default: `gp3`)
+    - `DRY_RUN` flag to simulate changes without executing
+- For each volume:
+    - Calls `ec2.modify_volume(VolumeId, VolumeType=TARGET)`
+    - If `DRY_RUN` is enabled:
+        - Skips API call
+        - Logs intended changes
+- Serializes AWS response to a JSON-safe format.
+
+### **Returns**
+
+- A `ModifyResults` array containing status for each volume.
+
+---
+
+## 4. [`verify_modification.py`](https://github.com/harshkhalkar/AutoVolumeManager/blob/main/lambda-function/verify_modification.py) – Verify Conversion Success
+
+### **Purpose**
+
+Poll AWS to check if the volume type modification was successful or failed.
+
+### **Key Code Elements**
+
+- Reads:
+    - `MAX_POLL_SECONDS`
+    - `POLL_INTERVAL_SECONDS`
+        
+        (from environment variables)
+        
+- Uses `ec2.describe_volumes_modifications()` to get current modification status.
+
+### **Key States:**
+
+- `completed`, `optimizing` → **Success**
+- `failed`, `error` → **Failure**
+
+### **Per Volume Logic:**
+
+- On success:
+    - Tags volume with:
+        - `AutoConverted`
+        - `ConvertedBy`
+        - `ConvertedAt`
+    - Updates DynamoDB: `ConversionStatus = COMPLETED`
+- On failure:
+    - Updates DynamoDB: `ConversionStatus = FAILED`
+- If still pending:
+    - Waits and retries until timeout
+- On timeout:
+    - Marks volumes as failed with message:
+        
+        > Timed out waiting for modification
+        > 
+
+### **Returns**
+
+- A `VerifyResults` array containing final state of each volume.
+
+---
+
+## 5. [`notify_sns.py`](https://github.com/harshkhalkar/AutoVolumeManager/blob/main/lambda-function/notify_sns.py) – Send Final Notification via SNS
+
+### **Purpose**
+
+Send a summary notification via SNS about conversion results.
+
+### **Key Code Elements**
+
+- Reads `SNS_TOPIC_ARN` from environment variables.
+- Constructs a message:
+    - Loops through `VerifyResults`
+    - For each volume:
+        - Logs:
+            - `VolumeId`
+            - Success status
+            - Final state
+        - Notes if the volume timed out
+- Sends the message to the SNS topic using `sns.publish()`.
+
+### **Returns**
+
+- On success: `MessageId`
+- On failure: AWS error message
