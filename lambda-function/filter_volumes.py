@@ -7,15 +7,22 @@ logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
 REGION = os.getenv("REGION")
+# Get the volume types from an environment variable, comma-separated. Default to ['gp2'] if not set
+VOLUME_TYPES = os.getenv("VOLUME_TYPES", "gp2").split(',')
+
+# Clean any whitespace around volume types
+VOLUME_TYPES = [vt.strip() for vt in VOLUME_TYPES if vt.strip()]
+
 ec2 = boto3.client("ec2", region_name=REGION) if REGION else boto3.client("ec2")
 
 def lambda_handler(event, context):
     """
-    Scans for EBS volumes of type gp2 and tag AutoConvert=true.
+    Scans for EBS volumes of specified types and tag AutoConvert=true.
     Returns: {'Volumes': [ {VolumeId, Size, VolumeType, AvailabilityZone, InstanceId, Tags}, ... ], 'ScannedCount': N}
     """
-    logger.info("Starting filter_volumes scan")
-    filters = [{'Name': 'volume-type', 'Values': ['gp2']}]
+    logger.info(f"Starting filter_volumes scan for volume types: {VOLUME_TYPES}")
+    
+    filters = [{'Name': 'volume-type', 'Values': VOLUME_TYPES}]
     paginator = ec2.get_paginator('describe_volumes')
     page_iterator = paginator.paginate(Filters=filters)
 
